@@ -58,15 +58,36 @@ REG_FAN1_SET = 0xB0  # CPU-side fan
 REG_FAN2_SET = 0xB1  # GPU-side fan
 
 # --- Fan speed read ----------------------------------------------------------
-# Which pair is live varies by generation: 0xFC/0xFE on Aero 14/15, 0xB3/0xB4 on
-# Aero 16. The probe reads all four and reports which ones actually move.
-REG_FAN1_READ = 0xFC
-REG_FAN2_READ = 0xFE
-REG_FAN1_READ_ALT = 0xB3
-REG_FAN2_READ_ALT = 0xB4
+#
+# MEASURED, and not what the sources imply.
+#
+# 0xB3/0xB4 are NOT a second tachometer pair. They are the *applied duty* - the
+# value the EC is actually driving the fan with. In custom mode they mirror
+# 0xB0/0xB1 exactly (set 92 -> 0xB3 reads 92, set 195 -> 195, set 229 -> 229).
+# In auto mode they show the EC's own curve output, which is why 0xB0 sat at 57
+# while 0xB3 climbed 75 -> 119 under load. That makes them the authoritative
+# answer to "what is the fan being driven at right now", whoever is deciding.
+REG_FAN1_APPLIED = 0xB3
+REG_FAN2_APPLIED = 0xB4
 
-# The read registers are not RPM. They are a small counter, empirically 0..22.
-FAN_READ_MAX = 22
+# 0xFC/0xFE are the real tachometers, on a 0..23 scale.
+#
+# THEY ARE CROSSED relative to the set registers. The split test set 0xB0=229
+# and 0xB1=92; 0xFE came back 23 (fast) and 0xFC came back 12 (slow). Mapping
+# duty to tachometer through the ramp data - 92->12, 229->23 - pairs 0xFE with
+# 0xB0 and 0xFC with 0xB1. p37-ec lists them the other way round.
+REG_FAN1_TACH = 0xFE
+REG_FAN2_TACH = 0xFC
+
+# Older names, kept so the probe's four-way candidate search still imports.
+REG_FAN1_READ = REG_FAN1_TACH
+REG_FAN2_READ = REG_FAN2_TACH
+REG_FAN1_READ_ALT = REG_FAN1_APPLIED
+REG_FAN2_READ_ALT = REG_FAN2_APPLIED
+
+# Observed ceiling on the tachometer scale.
+FAN_TACH_MAX = 23
+FAN_READ_MAX = FAN_TACH_MAX
 
 # --- Speed scale -------------------------------------------------------------
 # Raw PWM duty byte. 0xE5 (229) is full.
@@ -99,13 +120,26 @@ INTERESTING = {
     REG_QUIET: "quiet (bit6)",
     REG_GAMING: "gaming (bit4)",
     REG_CUSTOM_MODE: "custom mode (bit0) / deep (bit7)",
-    REG_FAN1_SET: "fan1 set",
-    REG_FAN2_SET: "fan2 set",
-    REG_FAN1_READ_ALT: "fan1 read (Aero16 position)",
-    REG_FAN2_READ_ALT: "fan2 read (Aero16 position)",
-    REG_FAN1_READ: "fan1 read (Aero15 position)",
-    REG_FAN2_READ: "fan2 read (Aero15 position)",
+    REG_FAN1_SET: "fan1 commanded duty",
+    REG_FAN2_SET: "fan2 commanded duty",
+    REG_FAN1_APPLIED: "fan1 applied duty",
+    REG_FAN2_APPLIED: "fan2 applied duty",
+    REG_FAN2_TACH: "fan2 tachometer (pairs with 0xB1)",
+    REG_FAN1_TACH: "fan1 tachometer (pairs with 0xB0)",
 }
+
+# The confirmed sequence to take the fans off the EC's curve, in this order.
+# Duty first, so that if custom mode engages the fans go loud rather than
+# silent - the EC's idle 0xB0 of 57 is below the stall floor.
+#
+#   1. 0x06 bit 4 = 1     fixed-speed type
+#   2. 0xB0, 0xB1 = duty  what we want
+#   3. 0x0D bit 7 = 1     custom mode ON        <- bit 7, not bit 0
+#
+# Verified: bit 7 moved the applied duty from 75 to 229 and the fans to full.
+# p37-ec calls bit 0 "custom mode activation"; on this BIOS bit 0 does nothing
+# and bit 7 is the switch, exactly as both NBFC configs have it.
+CUSTOM_MODE_BIT = BIT_DEEP_CONTROL
 
 
 def bit(value: int, position: int) -> bool:

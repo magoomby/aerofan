@@ -321,10 +321,15 @@ class EmbeddedController:
                 actual = self.read(register)
                 if actual == value:
                     return actual
+                # A single disagreeing read is not evidence - it may itself be
+                # a foreign byte. Confirm before spending another write.
+                actual = self.read_stable(register)
+                if actual == value:
+                    return actual
             except ECTimeout:
                 pass
             time.sleep(0.004 * (attempt + 1))
-        return actual if actual is not None else self.read(register)
+        return actual if actual is not None else self.read_stable(register)
 
     # -- burst mode ----------------------------------------------------------
     #
