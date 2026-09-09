@@ -121,16 +121,32 @@ class ThermalZoneTemperature:
 
 class SensorSet:
     """
-    The temperatures the curve runs on, each with a fallback chain.
+    The temperatures the curve runs on, each with a fallback chain, plus
+    detection of a sensor that has stopped being a sensor.
 
-    `hottest` is what the fan curve should use: with two heat sources sharing
-    one chassis and two fans that both help both, the safe input is whichever
-    is currently worse.
+    WHY THE STUCK DETECTOR EXISTS
+
+    A two-hour session of Baldur's Gate 3 reported the CPU at 27.9 C for the
+    entire run - not approximately, exactly, every single tick. That is
+    \\_tz.tz00 reading a constant 301 K: the counter exists, Windows reports it,
+    and it means nothing. The CPU fan sat at 45% for two hours while the GPU
+    fan was at 98%.
+
+    A reading that never moves is indistinguishable from a working sensor if
+    you only look at one value, so we compare across sides. A source that has
+    not changed at all over the window, while another source HAS moved, is not
+    measuring anything. Requiring the other side to be moving is what stops a
+    genuinely steady idle temperature from being called stuck.
     """
 
-    def __init__(self, cpu_sources: list, gpu_sources: list):
+    def __init__(self, cpu_sources: list, gpu_sources: list,
+                 stuck_seconds: float = 120.0):
         self.cpu_sources = cpu_sources
         self.gpu_sources = gpu_sources
+        self.stuck_seconds = stuck_seconds
+        self._history: dict[str, list[tuple[float, float]]] = {
+            "cpu": [], "gpu": []}
+        self._warned: set[str] = set()
 
     @staticmethod
     def _first_ok(sources) -> Reading:
@@ -147,8 +163,57 @@ class SensorSet:
     def gpu(self) -> Reading:
         return self._first_ok(self.gpu_sources)
 
-    def sample(self) -> dict:
+    def _record(self, side: str, reading: Reading, now: float) -> None:
+        if not reading.ok:
+            self._history[side].clear()
+            return
+        history = self._history[side]
+        history.append((now, reading.celsius))
+        cutoff = now - self.stuck_seconds * 2
+        while history and history[0][0] < cutoff:
+            history.pop(0)
+
+    def _flat_for_window(self, side: str, now: float) -> bool:
+        history = self._history[side]
+        window = [v for t, v in history if t >= now - self.stuck_seconds]
+        if len(window) < 5:
+            return False
+        if history[0][0] > now - self.stuck_seconds:
+            return False  # not enough elapsed time yet, only enough samples
+        return len(set(window)) == 1
+
+    def sample(self, now: float | None = None) -> dict:
+        import time as _time
+        now = _time.monotonic() if now is None else now
+
         cpu, gpu = self.cpu(), self.gpu()
+        self._record("cpu", cpu, now)
+        self._record("gpu", gpu, now)
+
+        cpu_flat = self._flat_for_window("cpu", now)
+        gpu_flat = self._flat_for_window("gpu", now)
+
+        # Only call it stuck if the *other* side is demonstrably alive.
+        for side, flat, other_flat, reading in (
+                ("cpu", cpu_flat, gpu_flat, cpu),
+                ("gpu", gpu_flat, cpu_flat, gpu)):
+            if flat and not other_flat and reading.ok:
+                if side not in self._warned:
+                    print(f"  SENSOR STUCK: {side} has read exactly "
+                          f"{reading.celsius:.1f}C for {self.stuck_seconds:.0f}s "
+                          f"while the other side moved.")
+                    print(f"  Source was '{reading.source}'. Ignoring it and "
+                          f"following the hotter side instead.")
+                    self._warned.add(side)
+                stuck = Reading(None, f"{reading.source} (stuck at "
+                                      f"{reading.celsius:.1f}C)")
+                if side == "cpu":
+                    cpu = stuck
+                else:
+                    gpu = stuck
+            elif not flat:
+                self._warned.discard(side)
+
         readings = [r.celsius for r in (cpu, gpu) if r.ok]
         return {
             "cpu": cpu,
