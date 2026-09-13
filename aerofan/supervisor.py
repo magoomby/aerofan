@@ -76,6 +76,9 @@ DEFAULT_CONFIG = {
     # A sensor that has not moved at all for this long, while the other side
     # has, is not a sensor. See SensorSet.
     "stuck_sensor_seconds": 120.0,
+    # Keep nvidia-smi as a second GPU source even though an EC register is
+    # configured. Off by default: see _build_sensors.
+    "nvidia_smi_fallback": False,
     # The four readout registers cost 12 EC transactions. The tooltip does not
     # need them more often than this many ticks, and this bus is contended
     # enough that the cheapest way to lose fewer reads is to make fewer.
@@ -208,7 +211,14 @@ class Supervisor:
         if self.config.get("gpu_temp_register") is not None:
             gpu_sources.append(ECTemperature(
                 self.ec, int(self.config["gpu_temp_register"]), scale, "gpu"))
-        gpu_sources.append(NvidiaTemperature())
+        # nvidia-smi only where there is nothing better. Once the EC register
+        # is known it is strictly worse: it costs a process launch, it does not
+        # work at all with the discrete GPU disabled, and - measured - the
+        # first call after an idle spell takes the GPU from P8 at 5 W to P0 at
+        # 25 W. Polling a GPU to ask its temperature is what keeps it awake.
+        if self.config.get("gpu_temp_register") is None \
+                or self.config.get("nvidia_smi_fallback"):
+            gpu_sources.append(NvidiaTemperature())
         # The chassis zone lags badly, so it is last and only for the CPU side.
         cpu_sources.append(ThermalZoneTemperature())
         return SensorSet(cpu_sources, gpu_sources,
@@ -286,6 +296,11 @@ class Supervisor:
             self.cpu_governor = self.gpu_governor = None
             self._release_quietly()
             self.watchdog.arm(False)
+            # Say so at once. We have just turned the switch off, so waiting
+            # for the next telemetry tick to read it back would leave the tray
+            # claiming we hold the fans for up to fifteen seconds after we
+            # visibly gave them up.
+            self._publish(custom=False, cpu_duty=None, gpu_duty=None)
             self.log.info("auto - fans returned to the EC's own curve")
             return
 
@@ -497,6 +512,11 @@ class Supervisor:
                 self._engage(pending, now)
                 self.effective = pending
                 self._last_logged = None
+                # Force a readout refresh on the tick that follows a switch:
+                # _ticks becomes 1 below, and 1 always reads. Otherwise the
+                # tooltip shows the old profile's fan speeds until the normal
+                # telemetry interval comes round.
+                self._ticks = 0
             with self._lock:
                 if self._pending == pending:
                     self._pending = None

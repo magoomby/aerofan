@@ -55,6 +55,7 @@ if __name__ == "__main__" and __package__ in (None, ""):
 
 from . import __version__
 from . import cpufreq
+from . import gpu as gpudev
 from . import ipc
 from .icons import colour_for
 from .state import (
@@ -212,6 +213,12 @@ class TrayApp:
                         f" {cpufreq.describe(cpu.get('dc'))} on battery")
                 elif cpu.get("limit"):
                     lines.append(f"CPU max {cpufreq.describe(cpu['limit'])}")
+            device = data.get("gpu_device") or {}
+            if device.get("present") and device.get("enabled") is False:
+                # Worth a line: the GPU temperature above still comes from the
+                # EC, so without this the tooltip would look completely normal
+                # while the card is switched off.
+                lines.append("discrete GPU off")
             tooltip = "\n".join(lines)
         self.icon.update(colour_for(profile, online=online, degraded=degraded),
                          tooltip)
@@ -244,6 +251,9 @@ class TrayApp:
 
         items.append(separator())
         items.extend(self._cpu_items(data, online))
+
+        items.append(separator())
+        items.extend(self._gpu_items(data, online))
 
         items.append(separator())
         if not online:
@@ -291,6 +301,38 @@ class TrayApp:
                 checked=True, enabled=False))
         return items
 
+    @staticmethod
+    def _gpu_items(data: dict, online: bool) -> list:
+        """
+        One item whose wording is the state rather than the action's target.
+
+        "Disable discrete GPU" when it is on, "Enable discrete GPU" when it is
+        off. A checkbox would be ambiguous here - ticked could mean either
+        "the GPU is on" or "this action is selected" - and the label cannot be.
+        """
+        state = data.get("gpu_device") or {}
+        if not online:
+            return [MenuItem(None, "Discrete GPU  (service not running)",
+                             enabled=False)]
+        if not state.get("present"):
+            return [MenuItem(None, "No discrete GPU on this machine",
+                             enabled=False)]
+
+        enabled = bool(state.get("enabled"))
+        # Disabling the last display adapter would leave a blank screen and no
+        # way back, so the item is greyed rather than merely failing.
+        allowed = enabled and not state.get("can_disable")
+        item = MenuItem(("gpu", not enabled), gpudev.menu_label(state),
+                        enabled=not allowed)
+        if allowed:
+            return [item, MenuItem(None, "   no other display adapter to fall"
+                                         " back to", enabled=False)]
+        if not enabled:
+            return [item, MenuItem(None, "   off - saves about 5 W, and it"
+                                         " stays off across reboots",
+                                   enabled=False)]
+        return [item]
+
     def on_command(self, action) -> None:
         self.log.info("command: %r", action)
         verb = action[0]
@@ -299,6 +341,9 @@ class TrayApp:
                              daemon=True).start()
         elif verb == "cpu":
             threading.Thread(target=self._set_cpu_max, args=(action[1],),
+                             daemon=True).start()
+        elif verb == "gpu":
+            threading.Thread(target=self._set_gpu, args=(action[1],),
                              daemon=True).start()
         elif verb == "log":
             os.startfile(str(data_dir()))
@@ -312,6 +357,10 @@ class TrayApp:
 
     def _set_cpu_max(self, mhz) -> None:
         self._send(f"cpu max {mhz}", lambda: ipc.set_cpu_max(mhz))
+
+    def _set_gpu(self, enabled: bool) -> None:
+        self._send("gpu " + ("on" if enabled else "off"),
+                   lambda: ipc.set_gpu(enabled))
 
     def _send(self, what: str, call) -> None:
         """

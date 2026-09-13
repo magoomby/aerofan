@@ -10,6 +10,8 @@ aerofan - drive the AERO 15's fans directly, or ask the service to.
     aerofan auto                give the fans back to the EC
     aerofan cpu                 the CPU maximum frequency cap
     aerofan cpu 2.3ghz          cap it; 'unlimited' to remove the cap
+    aerofan gpu                 whether the discrete GPU is on
+    aerofan gpu off             switch it off; about 5 W back on this laptop
 
 TWO WAYS TO THE SAME PLACE
 
@@ -47,6 +49,7 @@ import argparse
 import sys
 
 from . import cpufreq
+from . import gpu as gpudev
 from . import ipc
 from .control import Controller
 from .ec import ECError, EmbeddedController
@@ -202,8 +205,9 @@ def show_service(data: dict) -> None:
           f"{'the aerofan service (custom mode ON)' if holding else 'the EC own curve'}")
     print(f"  profile    : {profile} - {describe_profile(profile)}")
     if effective != profile:
-        print(f"  effective  : {effective}"
-              f"{'  (recovering from EC errors)' if data.get('degraded') else ''}")
+        reason = "  (not applied - see below)" if data.get("error") else \
+                 "  (recovering from EC errors)" if data.get("degraded") else ""
+        print(f"  effective  : {effective}{reason}")
     if data.get("error"):
         print(f"  note       : {data['error']}")
 
@@ -214,6 +218,11 @@ def show_service(data: dict) -> None:
                   f" in, {cpufreq.describe(cpu.get('dc'))} on battery")
         else:
             print(f"  cpu max    : {cpufreq.describe(cpu.get('limit'))}")
+
+    device = data.get("gpu_device") or {}
+    if device.get("present"):
+        print(f"  dgpu       : {'on' if device.get('enabled') else 'off'}"
+              f"   ({device.get('description')})")
 
     print(f"\n  cpu        : {_number(data.get('cpu_c'), 'C')}"
           f"   -> {_number(data.get('cpu_duty'), '%')}"
@@ -353,6 +362,54 @@ def run_cpu(args) -> int:
     return 0
 
 
+def run_gpu(args) -> int:
+    """
+    Show or switch the discrete GPU. Like the CPU cap, this touches no EC and
+    needs no driver - it is a PnP device state, so it goes through the service
+    when one is running and needs administrator when one is not.
+    """
+    if args.state is None:
+        state = gpudev.snapshot()
+        if not state.get("present"):
+            print("\n  This machine has no discrete GPU.\n")
+            return 0
+        print(f"\n  {state['description']}")
+        print(f"  currently : {'on' if state['enabled'] else 'off'}")
+        if state.get("fallback"):
+            print(f"  fallback  : {state['fallback']} drives the display")
+        if not state["enabled"]:
+            print("\n  It stays off across reboots - this is a device setting,"
+                  " not an aerofan one.")
+        print()
+        return 0
+
+    wanted = args.state == "on"
+    if ipc.is_running():
+        try:
+            data = ipc.set_gpu(wanted)
+            state = data.get("gpu_device") or {}
+        except (ipc.ServiceUnavailable, ipc.ProtocolError) as exc:
+            print(f"\n  {exc}\n")
+            return 1
+    else:
+        if not is_elevated():
+            print("\n  Switching a display adapter needs an elevated shell, or"
+                  " the service.\n")
+            return 1
+        try:
+            state = gpudev.set_enabled(wanted)
+        except gpudev.GpuError as exc:
+            print(f"\n  {exc}\n")
+            return 1
+
+    print(f"\n  {state.get('description')} is now"
+          f" {'on' if state.get('enabled') else 'off'}.")
+    if state.get("reboot_required"):
+        print("  Windows asked for a reboot to finish the change.")
+    print()
+    return 0
+
+
 # -- entry point -------------------------------------------------------------
 
 
@@ -386,12 +443,20 @@ def main(argv: list[str] | None = None) -> int:
         "mhz", nargs="?", default=None,
         help="2300, 2.3ghz, or 'unlimited'. Omit to show the current cap.")
 
+    gpu_parser = sub.add_parser(
+        "gpu", help="show or switch the discrete GPU")
+    gpu_parser.add_argument("state", nargs="?", choices=("on", "off"),
+                            default=None)
+
     args = parser.parse_args(argv)
 
-    # The CPU cap is a power-scheme setting, not an EC one, so it never wants
-    # the driver and does not care whether the service holds it.
+    # Neither of these touches the EC - one is a power-scheme setting and the
+    # other a PnP device state - so they never want the driver and do not care
+    # whether the service is holding it.
     if args.command == "cpu":
         return run_cpu(args)
+    if args.command == "gpu":
+        return run_gpu(args)
 
     if args.direct:
         return run_direct(args)

@@ -177,6 +177,7 @@ aerofan/
   supervisor.py  the control loop: switchable profile, telemetry, watchdog
   state.py       %ProgramData%\aerofan - the remembered profile, config, log
   cpufreq.py     the CPU max-frequency cap, via powrprof. Nothing to do with the EC
+  gpu.py         switching the discrete GPU off. Also nothing to do with the EC
   winservice.py  the Windows service. SYSTEM, from boot, owns the driver
   ipc.py         the named pipe everything else talks to it through
   icons.py       the tray icon, drawn in Python. No image files
@@ -190,6 +191,7 @@ tools/
   uninstall.ps1       stop, release the fans, remove everything
   install-pawnio.ps1  driver check + module fetch
   find_temps.py       hunt for the CPU/GPU temperature registers
+  battery_bench.ps1   measure what each CPU cap costs, in milliwatts
   probe_wmi.ps1       what vendor surfaces exist (they don't)
   probe_security.ps1  HVCI / blocklist status, i.e. why not WinRing0
 aerofan.example.json  a documented config to copy into %ProgramData%\aerofan\
@@ -251,9 +253,9 @@ show the firmware's own decision rather than a command nobody is issuing. The
 bracketed numbers are the real tachometers on their 0–23 scale. The fourth line
 appears only when the CPU is actually capped.
 
-Click for the menu. It is three blocks with lines between them: the fan
-profiles, [the CPU frequency cap](#the-cpu-frequency-cap), then the log folder
-and Exit. **Exit sets the profile to auto before it closes**, so the fans are
+Click for the menu. It is four blocks with lines between them: the fan
+profiles, [the CPU frequency cap](#the-cpu-frequency-cap),
+[the discrete GPU](#turning-the-discrete-gpu-off), then the log folder and Exit. **Exit sets the profile to auto before it closes**, so the fans are
 never left on a curve with no tray watching over them. It deliberately does
 *not* touch the CPU cap — see below for why.
 
@@ -386,6 +388,61 @@ you the truth instead of a comfortable fiction.
 `uninstall.ps1` warns if it is about to leave a cap behind, and clears it with
 `-ResetCpuLimit`. A throttled laptop with nothing left on it to explain why is
 a bad thing to hand someone.
+
+Choices are 1.4, 2.3, 3 and 4 GHz plus unlimited. 1.4 is deliberately well
+under the 2300 MHz base clock — a "taking notes in a lecture" setting rather
+than a performance one.
+
+Which cap is actually cheapest is not a question worth guessing at, so
+`tools\battery_bench.ps1` measures it. Unplug, run it, and it sets each cap in
+turn and reads the battery's own discharge rate in milliwatts. Two things it
+exists to settle: a frequency cap only bites when something asks for
+performance, and note-taking leaves the CPU idle most of the time — so the gap
+between caps is usually smaller than people expect. And **race to idle** cuts
+the other way: a slower CPU can use *more* energy for a burst of work because
+it stays awake longer doing it. Measure, then pick.
+
+### Turning the discrete GPU off
+
+| | |
+|---|---|
+| `python -m aerofan.cli gpu` | is it on |
+| `python -m aerofan.cli gpu off` | switch it off — no reboot, about 5 W back |
+| `python -m aerofan.cli gpu on` | switch it back |
+
+Also one item in the tray, whose wording is the state: "Disable discrete GPU"
+when it is on, "Enable discrete GPU" when it is off. No UAC prompt, because
+the service already runs as SYSTEM.
+
+Measured on this laptop: the RTX 2070 Super Max-Q idles at P8, 300 MHz, **5.3 W
+and never lower**. It is not reaching RTD3 deep sleep, because a dozen ordinary
+processes — explorer, Spotify, PowerToys, the terminal — each hold a handle on
+it just by enumerating DXGI adapters. Short of closing all of them, taking the
+device away is the only way to get that back.
+
+It goes through `pnputil /disable-device`, which takes about seven seconds and
+needs no reboot. Reading the state does **not** go through pnputil: its output
+is localised, so parsing it would work here and quietly fail on a German
+install. The state comes from `ConfigFlags` bit 0 in the registry instead,
+which is not translated.
+
+Two things to know. It **refuses to disable the last display adapter** — on
+this machine the Intel UHD drives the panel and the NVIDIA drives nothing
+(`nvidia-smi` reports `display_active: Disabled`), so there is a real fallback;
+without one the menu item is greyed out rather than left to fail. And the
+setting **persists across reboots**, because it lives in the device rather than
+in aerofan — the same trap as the CPU cap, so `uninstall.ps1` warns about it
+and `-ResetGpu` puts it back.
+
+> **This used to blind aerofan.** When the only working temperature source was
+> `nvidia-smi`, disabling the GPU meant no readings at all: the stuck detector
+> fired, the error budget drained, and the fans went back to the EC every
+> sixty seconds forever. Finding `0x60` and `0x61` is what made this safe, and
+> it cuts the other way too — with an EC register configured, `nvidia-smi` is
+> not called at all. It was costing a process launch every two seconds, and
+> measured, the first call after an idle spell took the GPU from P8 at 5 W to
+> P0 at 25 W. Polling a GPU to ask its temperature is what keeps it awake. Set
+> `nvidia_smi_fallback` if you want it back as a second source.
 
 > **On `PROCFREQMAX1`.** That is the same setting for efficiency class 1 — the
 > E-cores on a hybrid CPU — at the same GUID with the last byte incremented.

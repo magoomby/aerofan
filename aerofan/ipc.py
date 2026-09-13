@@ -371,6 +371,15 @@ def profiles(timeout_ms: int = 3000) -> list:
     return request({"cmd": "profiles"}, timeout_ms)
 
 
+def set_gpu(enabled: bool, timeout_ms: int = 30000) -> dict:
+    """
+    Enable or disable the discrete GPU. Slow - pnputil tears down or rebuilds
+    a display adapter, which takes a second or two and occasionally longer -
+    so the timeout is generous.
+    """
+    return request({"cmd": "set_gpu", "enabled": bool(enabled)}, timeout_ms)
+
+
 def set_cpu_max(mhz, timeout_ms: int = 8000) -> dict:
     """
     Cap the CPU. Slower than the others - PowerSetActiveScheme re-applies the

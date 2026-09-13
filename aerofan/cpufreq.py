@@ -66,7 +66,9 @@ PROCFREQMAX1 = "75b0ae3f-bce0-45a7-8c89-c9611c25e101"
 UNLIMITED = 0
 
 # What the tray menu offers. Override with "cpu_max_choices" in aerofan.json.
-DEFAULT_CHOICES = (2300, 3000, 4000, UNLIMITED)
+# 1400 is well under the 2300 MHz base clock: a deliberate "I am taking notes"
+# setting rather than a performance one.
+DEFAULT_CHOICES = (1400, 2300, 3000, 4000, UNLIMITED)
 
 DEFAULT_POWER_SOURCES = ("ac", "dc")
 
@@ -231,6 +233,12 @@ def read_limit() -> dict:
     they agree, and None when they do not, because there is no honest single
     answer in that case and a tick mark should not invent one.
     """
+    # There is no "is this CPU hybrid" field here, deliberately. The obvious
+    # test - read PROCFREQMAX1 and see whether it fails - does not work: it
+    # returns success on this i7-10875H, which has no E-cores and does not
+    # list the setting in SUB_PROCESSOR at all. Reporting a guess as a fact is
+    # worse than not reporting it, and nothing needs the answer, because the
+    # class-1 write is best effort either way.
     with _ActiveScheme() as scheme:
         ac = _read(scheme, _MAX, dc=False)
         dc = _read(scheme, _MAX, dc=True)
@@ -242,12 +250,6 @@ def read_limit() -> dict:
         "agrees": ac == dc,
         "supported": ac is not None,
     }
-    # No "is this CPU hybrid" field, deliberately. The obvious test - read
-    # PROCFREQMAX1 and see whether it fails - does not work: it returns
-    # success on this i7-10875H, which has no E-cores and does not list the
-    # setting in SUB_PROCESSOR at all. Reporting a guess as a fact is worse
-    # than not reporting it, and nothing needs the answer: the class-1 write
-    # is best effort either way.
 
 
 def apply_limit(mhz, sources=DEFAULT_POWER_SOURCES) -> dict:
@@ -317,8 +319,7 @@ class CpuLimit:
                 if self.log:
                     self.log.warning("could not read the CPU limit: %s", exc)
                 value = {"ac": None, "dc": None, "limit": None, "agrees": True,
-                         "hybrid": False, "supported": False,
-                         "error": str(exc)}
+                         "supported": False, "error": str(exc)}
             self._value = value
             self._read_at = time.monotonic()
             return dict(value, choices=list(self.choices))

@@ -29,13 +29,18 @@
     otherwise go on throttling the machine with nothing left to explain why.
     Without this switch the uninstaller reports the cap and leaves it alone.
 
+.PARAMETER ResetGpu
+    Also re-enable the discrete GPU if aerofan turned it off. Like the CPU cap,
+    that is a Windows device setting rather than an aerofan one, so it survives
+    the uninstall and every reboot. Without this the uninstaller only warns.
+
 .EXAMPLE
     .\tools\uninstall.ps1
-    .\tools\uninstall.ps1 -RemoveData -ResetCpuLimit
+    .\tools\uninstall.ps1 -RemoveData -ResetCpuLimit -ResetGpu
 #>
 
 [CmdletBinding()]
-param([switch]$RemoveData, [switch]$ResetCpuLimit)
+param([switch]$RemoveData, [switch]$ResetCpuLimit, [switch]$ResetGpu)
 
 $ErrorActionPreference = 'Continue'
 
@@ -150,11 +155,14 @@ except Exception as exc:
 
 Write-Step 'Checking the CPU frequency cap'
 
+function Get-FreqIndex($lines, $pattern) {
+    $match = $lines | Select-String $pattern | Select-Object -First 1
+    if ($match) { [Convert]::ToInt32($match.Matches[0].Groups[1].Value, 16) } else { 0 }
+}
+
 $q = powercfg /query SCHEME_CURRENT SUB_PROCESSOR PROCFREQMAX 2>$null
-$ac = ($q | Select-String 'Current AC Power Setting Index:\s*0x([0-9a-f]+)').Matches.Groups[1].Value
-$dc = ($q | Select-String 'Current DC Power Setting Index:\s*0x([0-9a-f]+)').Matches.Groups[1].Value
-$acMhz = if ($ac) { [Convert]::ToInt32($ac, 16) } else { 0 }
-$dcMhz = if ($dc) { [Convert]::ToInt32($dc, 16) } else { 0 }
+$acMhz = Get-FreqIndex $q 'Current AC Power Setting Index:\s*0x([0-9a-f]+)'
+$dcMhz = Get-FreqIndex $q 'Current DC Power Setting Index:\s*0x([0-9a-f]+)'
 
 if ($acMhz -eq 0 -and $dcMhz -eq 0) {
     Write-Ok 'no cap set - the CPU is unrestricted'
@@ -175,7 +183,37 @@ if ($acMhz -eq 0 -and $dcMhz -eq 0) {
     Write-Host "                          powercfg /setactive SCHEME_CURRENT" -ForegroundColor Yellow
 }
 
-# --- 5. data -----------------------------------------------------------------
+# --- 5. the discrete GPU, which also outlives us ----------------------------
+
+Write-Step 'Checking the discrete GPU'
+
+$dgpu = Get-PnpDevice -Class Display -ErrorAction SilentlyContinue |
+    Where-Object { $_.InstanceId -match 'VEN_10DE|VEN_1002' } | Select-Object -First 1
+
+if (-not $dgpu) {
+    Write-Ok 'no discrete GPU on this machine'
+} elseif ($dgpu.Status -ne 'Error' -and $dgpu.Status -ne 'Unknown' -and
+          $dgpu.Status -ne 'Degraded' -and $dgpu.Problem -ne 'CM_PROB_DISABLED') {
+    Write-Ok "$($dgpu.FriendlyName) is enabled"
+} else {
+    # Same trap as the CPU cap: this is a device setting, so removing aerofan
+    # does not undo it, and a laptop that has silently lost its GPU is a bad
+    # thing to leave behind.
+    Write-Warn ("$($dgpu.FriendlyName) appears to be DISABLED. That is a Windows " +
+                "device setting, not an aerofan one, so it survives this uninstall " +
+                "and every reboot.")
+    Write-Host "          Re-enable it with:  pnputil /enable-device `"$($dgpu.InstanceId)`"" -ForegroundColor Yellow
+    Write-Host "          or in Device Manager -> Display adapters -> right-click -> Enable" -ForegroundColor Yellow
+    if ($ResetGpu) {
+        & pnputil /enable-device $dgpu.InstanceId | Out-Null
+        Start-Sleep -Seconds 3
+        Write-Ok 're-enabled'
+    } else {
+        Write-Host "          Add -ResetGpu to have this script turn it back on." -ForegroundColor Yellow
+    }
+}
+
+# --- 6. data -----------------------------------------------------------------
 
 if ($RemoveData) {
     Write-Step 'Removing %ProgramData%\aerofan'

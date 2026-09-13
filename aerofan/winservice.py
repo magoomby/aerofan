@@ -61,6 +61,7 @@ if __name__ == "__main__" and __package__ in (None, ""):
 
 from . import __version__
 from . import cpufreq
+from . import gpu
 from .control import Controller
 from .cpufreq import CpuLimit
 from .ec import EmbeddedController
@@ -245,6 +246,7 @@ class Engine:
             "profiles": self._cmd_profiles,
             "set": self._cmd_set,
             "set_cpu_max": self._cmd_set_cpu_max,
+            "set_gpu": self._cmd_set_gpu,
         }, log)
 
     # -- pipe verbs ----------------------------------------------------------
@@ -269,10 +271,23 @@ class Engine:
             self.log.debug("CPU limit unavailable: %s", exc)
             data["cpu"] = {"limit": None, "supported": False,
                            "error": str(exc), "choices": []}
+        try:
+            data["gpu_device"] = gpu.snapshot()
+        except Exception as exc:
+            self.log.debug("GPU state unavailable: %s", exc)
+            data["gpu_device"] = {"present": False, "enabled": None,
+                                  "can_disable": False, "error": str(exc)}
         return data
 
     def _cmd_set_cpu_max(self, request: dict) -> dict:
         self.cpu.apply(request.get("mhz"))
+        return self._cmd_status(request)
+
+    def _cmd_set_gpu(self, request: dict) -> dict:
+        wanted = bool(request.get("enabled"))
+        state = gpu.set_enabled(wanted)
+        self.log.info("discrete GPU %s%s", "enabled" if wanted else "disabled",
+                      " (reboot required)" if state.get("reboot_required") else "")
         return self._cmd_status(request)
 
     def _cmd_profiles(self, _request: dict) -> list:
