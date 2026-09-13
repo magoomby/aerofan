@@ -1,0 +1,7 @@
+{
+  "_comment": "Copy this to %ProgramData%\\aerofan\\aerofan.json and restart the AeroFan service. 0x60 (96) is the CPU temperature and 0x61 (97) the GPU, both in plain degrees C, confirmed on an AERO 15 Studio XB (i7-10875H, BIOS HFB07) with tools/find_temps.py: 0x61 tracks nvidia-smi to within one degree, and 0x60 idles near 60C, spikes to 90C the moment an all-core load starts, settles to about 77C at thermal equilibrium, and falls back on cooldown. 0x62 and 0x65 mirror 0x60 byte for byte - alternates if 0x60 ever stops making sense. On a different machine confirm with find_temps.py rather than assuming: the register map is inherited, not guaranteed.",
+  "cpu_temp_register": 96,
+  "gpu_temp_register": 97,
+  "temp_scale": 1.0,
+  "_other_settings": "Everything in supervisor.DEFAULT_CONFIG can be overridden here - poll_seconds, auto_poll_seconds, cross_coupling, watchdog_seconds, ec_error_budget, recovery_seconds, telemetry_every, cpu_max_choices, cpu_max_power_sources. Anything you leave out keeps its default."
+}

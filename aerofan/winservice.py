@@ -198,8 +198,12 @@ def load_config() -> dict:
     config = dict(DEFAULT_CONFIG, **SERVICE_DEFAULTS)
     path = config_file()
     try:
+        # utf-8-sig so a config saved from Notepad or PowerShell - both of
+        # which write a BOM - is read rather than rejected. This file is
+        # meant to be hand-edited, so it has to survive the editors people
+        # actually have.
         if path.is_file():
-            config.update(json.loads(path.read_text(encoding="utf-8")))
+            config.update(json.loads(path.read_text(encoding="utf-8-sig")))
     except (OSError, ValueError) as exc:
         logging.getLogger("aerofan").warning(
             "ignoring %s: %s", path, exc)

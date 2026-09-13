@@ -57,6 +57,15 @@ $ServiceScript = Join-Path $Repo 'aerofan\winservice.py'
 $TrayScript = Join-Path $Repo 'aerofan\tray.py'
 $DataDir = Join-Path $env:ProgramData 'aerofan'
 
+# Windows PowerShell's Set-Content -Encoding UTF8 writes a byte order mark,
+# and a BOM in front of a JSON document is a parse error for most readers.
+# aerofan tolerates one now, but writing a clean file is the honest fix.
+function Write-Json($path, $object) {
+    $text = ($object | ConvertTo-Json)
+    [System.IO.File]::WriteAllText($path, $text,
+        (New-Object System.Text.UTF8Encoding($false)))
+}
+
 function Write-Step($text) { Write-Host "`n  $text" -ForegroundColor Cyan }
 function Write-Ok($text)   { Write-Host "    ok    $text" -ForegroundColor Green }
 function Write-Warn($text) { Write-Host "    warn  $text" -ForegroundColor Yellow }
@@ -180,12 +189,10 @@ Write-Ok $DataDir
 
 $statePath = Join-Path $DataDir 'state.json'
 if ($FanProfile) {
-    @{ profile = $FanProfile; updated = (Get-Date -Format 's') } |
-        ConvertTo-Json | Set-Content -Path $statePath -Encoding UTF8
+    Write-Json $statePath @{ profile = $FanProfile; updated = (Get-Date -Format 's') }
     Write-Ok "profile set to '$FanProfile'"
 } elseif (-not (Test-Path $statePath)) {
-    @{ profile = 'auto'; updated = (Get-Date -Format 's') } |
-        ConvertTo-Json | Set-Content -Path $statePath -Encoding UTF8
+    Write-Json $statePath @{ profile = 'auto'; updated = (Get-Date -Format 's') }
     Write-Ok "profile set to 'auto' (the EC's own curve) - change it from the tray icon"
 } else {
     $existing = (Get-Content $statePath -Raw | ConvertFrom-Json).profile

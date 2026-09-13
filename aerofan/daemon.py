@@ -49,7 +49,9 @@ from .supervisor import DEFAULT_CONFIG, Supervisor
 def load_config(path: Path | None) -> dict:
     config = dict(DEFAULT_CONFIG)
     if path and path.is_file():
-        config.update(json.loads(path.read_text(encoding="utf-8")))
+        # utf-8-sig: see the note in winservice.load_config. A BOM from
+        # Notepad must not be the reason a curve does not load.
+        config.update(json.loads(path.read_text(encoding="utf-8-sig")))
     return config
 
 

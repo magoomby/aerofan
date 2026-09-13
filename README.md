@@ -79,6 +79,8 @@ and the NBFC `Gigabyte Aero15x v8` config, which agree:
 | `0xB1` | fan 2 (GPU) duty |
 | `0xFC` / `0xFE` | fan 1 / fan 2 speed readout, 0–22 scale (Aero 15 position) |
 | `0xB3` / `0xB4` | same, Aero 16 position — probed as an alternative |
+| `0x60` | **CPU temperature**, plain °C — found here, not in any source below |
+| `0x61` | **GPU temperature**, plain °C — same |
 
 Duty is `0x00`–`0xE5` (0–229) for 0–100 %.
 
@@ -98,6 +100,10 @@ Duty is `0x00`–`0xE5` (0–229) for 0–100 %.
 | Gaming mode works, but only nudges the curve | idle `0xB3` 75 → 80; load peak 107 → 119 |
 | Burst mode is granted | `0x82` acknowledged with `0x90`, `BURST` set. Not needed now that writes retry, but available |
 | There is no `Access_EC` mutant | `OpenMutexW` → `ERROR_FILE_NOT_FOUND` for all three names |
+| **`0x61` is the GPU temperature, in plain °C** | Tracks `nvidia-smi` to within 1 °C across a whole load/cool run, and matched it exactly on a live re-check (47 = 47) |
+| **`0x60` is the CPU temperature, in plain °C** | Idles ~48 °C, spikes to 90 °C the instant an all-core load starts, settles to 76 °C at equilibrium, falls back to 61 °C on cooldown. A CPU-only load barely moves `0x61`, so the two are independent sensors rather than mirrors |
+| `0x62` and `0x65` mirror `0x60` | Byte-identical across all 54 samples of a load run — shadow copies, usable as alternates |
+| Only seven registers are even candidates | Across the full 256-byte map, only `0x16`, `0x60`, `0x61`, `0x62`, `0x65`, `0xB3`, `0xB4` both stay inside 25–105 and move at all; `0x16` ignores load entirely |
 
 The missing gale is explained: with Gigabyte Control Center gone, nothing has
 ever switched this EC off its default curve, and `0xB0` is the register that
@@ -143,18 +149,18 @@ can actually hear is what turns them from "a byte that moves" into "the CPU fan"
 | 2 — custom mode + fixed speed | **done** |
 | 3 — SYSTEM service + named pipe, curve, watchdog, resume handling | **done** |
 | 4 — tray icon, install/uninstall scripts | **done** |
-| 5 — find the real CPU temperature register | open |
+| 5 — find the real CPU temperature register | **done** — `0x60` and `0x61` |
 
 Phase 3 put the driver handle in a SYSTEM-side service behind a named pipe with
 a whitelisted API, so the day-to-day CLI runs unelevated and a bug in the policy
 layer cannot write to an arbitrary EC byte.
 
-Phase 5 is the one that matters now. With no CPU temperature register
-configured the CPU side falls back to the ACPI chassis zone, which on this
-machine reads a constant 301 K and is not measuring anything — see the stuck
-sensor detector in `sensors.py`, which exists because of it. `tools/find_temps.py`
-looks for the real register; until it finds one, the CPU fan is following the
-GPU through the cross-coupling floor rather than its own sensor.
+Phase 5 closed the last real gap. Until it did, the CPU side fell back to the
+ACPI chassis zone, which on this machine reads a constant 301 K and is not
+measuring anything — the stuck-sensor detector in `sensors.py` exists because
+of it — so the CPU fan only ever followed the GPU through the cross-coupling
+floor. Both fans now run on their own sensors and their duties diverge, which
+is what you want to see.
 
 ---
 
@@ -186,6 +192,7 @@ tools/
   find_temps.py       hunt for the CPU/GPU temperature registers
   probe_wmi.ps1       what vendor surfaces exist (they don't)
   probe_security.ps1  HVCI / blocklist status, i.e. why not WinRing0
+aerofan.example.json  a documented config to copy into %ProgramData%\aerofan\
 ```
 
 No third-party Python dependencies. `ctypes` only, same as fusion-kbd — the
@@ -330,6 +337,15 @@ the shell sends the icon as well.
 The three curve profiles live in `curve.py` and are yours to edit. Tuning knobs
 — poll interval, temperature registers, cross-coupling — go in
 `%ProgramData%\aerofan\aerofan.json`, which is never written by aerofan itself.
+`aerofan.example.json` in the repo is a documented starting point; copy it
+there and restart the service. Anything you leave out keeps its default from
+`supervisor.DEFAULT_CONFIG`.
+
+A BOM is fine. Notepad and PowerShell's `Set-Content -Encoding UTF8` both write
+one, and `json.loads` rejects it outright, so the config and the saved profile
+are read as `utf-8-sig`. Getting this wrong is silent by nature — the service
+logs the parse failure and carries on with defaults, which looks exactly like
+the file having no effect.
 
 ### The CPU frequency cap
 

@@ -182,7 +182,12 @@ def read_state() -> dict:
     """
     default = {"profile": DEFAULT_PROFILE, "updated": None}
     try:
-        raw = json.loads(state_file().read_text(encoding="utf-8"))
+        # utf-8-sig, not utf-8: Notepad and PowerShell's Set-Content both
+        # write a UTF-8 byte order mark by default, and json.loads rejects
+        # it outright. The installer writes this file from PowerShell, so
+        # plain utf-8 here meant a hand-installed profile was silently
+        # ignored at first boot and quietly replaced by the default.
+        raw = json.loads(state_file().read_text(encoding="utf-8-sig"))
     except (OSError, ValueError):
         return default
     if not isinstance(raw, dict):
