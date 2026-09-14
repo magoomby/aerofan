@@ -193,6 +193,16 @@ class Controller:
 
     # -- observation ---------------------------------------------------------
 
+    def holds_control(self) -> bool:
+        """
+        Cheap check that custom mode is still on: one register, not ten.
+
+        The daemon needs this every tick, and a full state() is 10 registers at
+        3 agreeing reads each - 30 mailbox transactions every couple of seconds,
+        for hours, on a bus we share with the OS with no mutex. This is 3.
+        """
+        return bit(self.ec.read_stable(REG_CUSTOM_MODE), CUSTOM_MODE_BIT)
+
     def state(self, stable: bool = True) -> dict:
         """
         Read the six control bytes and the four readouts.

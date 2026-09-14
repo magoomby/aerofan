@@ -4,15 +4,22 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "aerofan"
-version = "0.1.0"
+version = "0.2.0"
 description = "Fan control for the Gigabyte AERO 15 on Windows 11"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { file = "LICENSE" }
+# Deliberately empty, and worth keeping that way: the service, the named pipe
+# and the tray icon are all ctypes against Win32. It installs on a machine with
+# nothing on it but Python and PawnIO.
 dependencies = []
 
 [project.scripts]
+aerofan = "aerofan.cli:main"
 aerofan-probe = "aerofan.probe:main"
+
+[project.gui-scripts]
+aerofan-tray = "aerofan.tray:main"
 
 [tool.setuptools.packages.find]
 include = ["aerofan*"]
